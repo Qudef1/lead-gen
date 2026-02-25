@@ -1,0 +1,152 @@
+{
+  "design_system": {
+    "identity": {
+      "name": "Interexy Sales AI",
+      "tone": "Professional, Efficient, Data-Driven, Corporate",
+      "archetype": "The Performance Pro (Adapted for Corporate)",
+      "theme_strategy": "Light Mode Only (Strict Business Logic)"
+    },
+    "typography": {
+      "font_family": {
+        "headings": "Inter, system-ui, sans-serif",
+        "body": "Inter, system-ui, sans-serif",
+        "mono": "JetBrains Mono, monospace"
+      },
+      "scale": {
+        "h1": "text-3xl font-bold tracking-tight text-[#1a2744]",
+        "h2": "text-2xl font-semibold tracking-tight text-[#1a2744]",
+        "h3": "text-lg font-semibold text-slate-900",
+        "body": "text-sm leading-relaxed text-slate-600",
+        "small": "text-xs font-medium text-slate-500 uppercase tracking-wider"
+      }
+    },
+    "colors": {
+      "primary": {
+        "base": "#1a2744",
+        "hover": "#141e33",
+        "foreground": "#ffffff"
+      },
+      "secondary": {
+        "base": "#f1f5f9",
+        "foreground": "#0f172a"
+      },
+      "accent": {
+        "base": "#10b981", 
+        "hover": "#059669",
+        "foreground": "#ffffff"
+      },
+      "neutral": {
+        "background": "#f8fafc",
+        "surface": "#ffffff",
+        "border": "#e2e8f0",
+        "text_primary": "#0f172a",
+        "text_secondary": "#64748b"
+      },
+      "functional": {
+        "success": "#10b981",
+        "warning": "#f59e0b",
+        "error": "#ef4444",
+        "info": "#3b82f6"
+      }
+    },
+    "layout": {
+      "container": "max-w-7xl mx-auto px-6 py-8",
+      "grid_system": "grid grid-cols-1 md:grid-cols-12 gap-6",
+      "spacing": {
+        "section_gap": "gap-8",
+        "card_padding": "p-6",
+        "internal_gap": "gap-4"
+      },
+      "z_index": {
+        "header": "z-50",
+        "modal": "z-50",
+        "tooltip": "z-60"
+      }
+    },
+    "components": {
+      "buttons": {
+        "primary": "bg-[#1a2744] hover:bg-[#141e33] text-white shadow-sm rounded-md h-10 px-6 font-medium transition-all active:scale-95",
+        "secondary": "bg-white border border-slate-200 hover:bg-slate-50 text-slate-900 shadow-sm rounded-md h-10 px-4 font-medium transition-all",
+        "ghost": "hover:bg-slate-100 text-slate-600 hover:text-slate-900 rounded-md h-9 px-3",
+        "icon": "h-8 w-8 p-0 rounded-full hover:bg-slate-100 text-slate-500"
+      },
+      "cards": {
+        "lead_card": "bg-white rounded-lg border border-slate-200 shadow-sm hover:shadow-md transition-shadow duration-200 overflow-hidden",
+        "metric_card": "bg-white rounded-lg border border-slate-200 p-4 flex flex-col gap-1"
+      },
+      "badges": {
+        "fit_high": "bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-0.5 rounded-full text-xs font-semibold",
+        "fit_medium": "bg-amber-50 text-amber-700 border border-amber-200 px-2.5 py-0.5 rounded-full text-xs font-semibold",
+        "fit_low": "bg-red-50 text-red-700 border border-red-200 px-2.5 py-0.5 rounded-full text-xs font-semibold"
+      },
+      "inputs": {
+        "default": "flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1a2744] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+      }
+    },
+    "motion": {
+      "transitions": "transition-all duration-200 ease-in-out",
+      "hover_effects": "hover:translate-y-[-1px]",
+      "loading": "animate-pulse"
+    }
+  },
+  "visual_enhancers": {
+    "shadows": {
+      "subtle": "shadow-[0_1px_2px_rgba(0,0,0,0.05)]",
+      "medium": "shadow-[0_4px_6px_-1px_rgba(0,0,0,0.1),0_2px_4px_-1px_rgba(0,0,0,0.06)]",
+      "heavy": "shadow-[0_10px_15px_-3px_rgba(0,0,0,0.1),0_4px_6px_-2px_rgba(0,0,0,0.05)]"
+    },
+    "borders": {
+      "default": "border border-slate-200",
+      "active": "border border-[#1a2744]"
+    },
+    "radius": {
+      "default": "rounded-lg",
+      "button": "rounded-md",
+      "badge": "rounded-full"
+    }
+  },
+  "implementation_steps": [
+    {
+      "step": 1,
+      "action": "Configure Tailwind Theme",
+      "details": "Update tailwind.config.js to include the custom color palette (#1a2744 primary, #10b981 accent) and font settings.",
+      "file_path": "/app/frontend/tailwind.config.js"
+    },
+    {
+      "step": 2,
+      "action": "Update Global CSS",
+      "details": "Set CSS variables in index.css to match the design system (light mode default). Ensure body background is #f8fafc (slate-50).",
+      "file_path": "/app/frontend/src/index.css"
+    },
+    {
+      "step": 3,
+      "action": "Create Layout Wrapper",
+      "details": "Build a main Layout component with the sticky header and centered container.",
+      "component_name": "Layout"
+    },
+    {
+      "step": 4,
+      "action": "Develop Lead Card Component",
+      "details": "Create the LeadCard component with collapsible functionality, fit score badges, and message tabs using Shadcn.",
+      "component_name": "LeadCard"
+    },
+    {
+      "step": 5,
+      "action": "Develop Dashboard View",
+      "details": "Assemble the dashboard with the 'Run Analysis' button, Progress bar, and the list of LeadCards.",
+      "component_name": "Dashboard"
+    }
+  ],
+  "image_urls": {},
+  "universal_guidelines": [
+    "Prioritize data density without clutter. Use whitespace to separate logical groups, not just to fill space.",
+    "Ensure all interactive elements (buttons, tabs, copy icons) have clear hover states.",
+    "Use 'Lucide React' icons for all iconography (User, Building, Copy, Check, BarChart, etc.).",
+    "Fit Scores (1-10) must be visually distinct: 8-10 (Green), 5-7 (Yellow/Amber), 1-4 (Red).",
+    "Loading states are critical: Show a progress bar with specific text steps (e.g., 'Fetching leads...', 'Analyzing sentiment...', 'Generating drafts...') instead of a generic spinner.",
+    "Do NOT use gradients for backgrounds. Stick to flat, clean, solid colors for professional readability.",
+    "The 'Run Analysis' button should be prominent (large size) but professional.",
+    "Message copy functionality must trigger a Sonner toast notification.",
+    "All interactive elements MUST have a data-testid attribute."
+  ]
+}
