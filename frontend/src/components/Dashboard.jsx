@@ -1,7 +1,15 @@
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { LeadCard } from "@/components/LeadCard";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Play,
   Loader2,
@@ -11,9 +19,26 @@ import {
   CheckCircle2,
   XCircle,
   BarChart3,
+  RefreshCw,
 } from "lucide-react";
 
-export function Dashboard({ isRunning, status, results, error, onRunAnalysis }) {
+export function Dashboard({ isRunning, status, results, error, onRunAnalysis, onRetryLeads, jobId, accounts, selectedAccountId, onAccountChange }) {
+  const [selectedLeads, setSelectedLeads] = useState(new Set());
+
+  const toggleSelect = (name) => {
+    setSelectedLeads((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  const handleRetry = () => {
+    const names = [...selectedLeads];
+    setSelectedLeads(new Set());
+    onRetryLeads(names);
+  };
   const totalLeads = status?.total_leads || 0;
   const processed = status?.processed || 0;
   const progressPercent = totalLeads > 0 ? Math.round((processed / totalLeads) * 100) : 0;
@@ -53,9 +78,27 @@ export function Dashboard({ isRunning, status, results, error, onRunAnalysis }) 
       {/* Action Area */}
       <section className="mb-8" data-testid="action-section">
         <div className="flex items-center gap-4">
+          {accounts.length > 0 && (
+            <Select
+              value={selectedAccountId ? String(selectedAccountId) : ""}
+              onValueChange={(val) => onAccountChange(Number(val))}
+              disabled={isRunning}
+            >
+              <SelectTrigger className="w-52 h-12 border-slate-300 text-slate-700 font-medium">
+                <SelectValue placeholder="Select account..." />
+              </SelectTrigger>
+              <SelectContent>
+                {accounts.map((acc) => (
+                  <SelectItem key={acc.id} value={String(acc.id)}>
+                    {acc.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <Button
             onClick={onRunAnalysis}
-            disabled={isRunning}
+            disabled={isRunning || !selectedAccountId}
             className="bg-[#10b981] hover:bg-[#059669] text-white h-12 px-8 text-base font-semibold rounded-lg shadow-sm transition-all active:scale-95 disabled:opacity-60"
             data-testid="run-analysis-btn"
           >
@@ -180,12 +223,29 @@ export function Dashboard({ isRunning, status, results, error, onRunAnalysis }) 
                   <span>{failedCount} failed</span>
                 </div>
               )}
+              {selectedLeads.size > 0 && (
+                <Button
+                  onClick={handleRetry}
+                  disabled={isRunning}
+                  size="sm"
+                  className="bg-amber-500 hover:bg-amber-600 text-white font-semibold"
+                >
+                  <RefreshCw className="mr-1.5 h-4 w-4" />
+                  Retry Selected ({selectedLeads.size})
+                </Button>
+              )}
             </div>
           </div>
 
           <div className="space-y-4" data-testid="results-list">
             {results.results.map((lead, idx) => (
-              <LeadCard key={idx} lead={lead} index={idx} />
+              <LeadCard
+                key={idx}
+                lead={lead}
+                index={idx}
+                isSelected={selectedLeads.has(lead.name)}
+                onSelect={() => toggleSelect(lead.name)}
+              />
             ))}
           </div>
         </section>

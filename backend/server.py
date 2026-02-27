@@ -9,7 +9,8 @@ import json
 import httpx
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List
+from pydantic import BaseModel
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -17,6 +18,9 @@ load_dotenv(ROOT_DIR / '.env')
 HEYREACH_API_KEY = os.environ.get('HEYREACH_API_KEY')
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 LINKEDIN_ACCOUNT_ID = os.environ.get('LINKEDIN_ACCOUNT_ID')
+
+_accounts_raw = os.environ.get('LINKEDIN_ACCOUNTS', '[]')
+LINKEDIN_ACCOUNTS = json.loads(_accounts_raw)
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -30,13 +34,13 @@ logger = logging.getLogger(__name__)
 
 # ==================== HEYREACH API ====================
 
-async def fetch_unread_conversations() -> list:
+async def fetch_unread_conversations(account_id: int) -> list:
     """Fetch all unread conversations from HeyReach API"""
     url = "https://api.heyreach.io/api/public/inbox/GetConversationsV2"
     headers = {"X-API-KEY": HEYREACH_API_KEY, "Content-Type": "application/json"}
     payload = {
         "filters": {
-            "linkedInAccountIds": [int(LINKEDIN_ACCOUNT_ID)],
+            "linkedInAccountIds": [account_id],
             "seen": False
         },
         "offset": 0,
@@ -346,16 +350,16 @@ Return ONLY valid JSON:
 
 # ==================== BACKGROUND PIPELINE ====================
 
-async def run_analysis_pipeline(job_id: str):
+async def run_analysis_pipeline(job_id: str, account_id: int):
     """Main analysis pipeline running in background"""
     job = jobs[job_id]
     try:
         # Step 1: Fetch conversations
         job['step'] = 'fetching'
         job['status_text'] = 'Fetching unread conversations from HeyReach...'
-        logger.info(f"[{job_id}] Fetching conversations")
+        logger.info(f"[{job_id}] Fetching conversations for account {account_id}")
 
-        conversations = await fetch_unread_conversations()
+        conversations = await fetch_unread_conversations(account_id)
         job['total_conversations'] = len(conversations)
         job['status_text'] = f'Found {len(conversations)} unread conversations. Filtering for Catch Up leads...'
 
@@ -392,7 +396,8 @@ async def run_analysis_pipeline(job_id: str):
                 'profileUrl': profile.get('profileUrl', ''),
                 'headline': profile.get('headline', ''),
                 'status': 'pending',
-                'step': 'waiting'
+                'step': 'waiting',
+                'conversation': conv
             })
 
         job['status_text'] = f'Found {len(catchup_conversations)} Catch Up leads. Starting analysis...'
@@ -457,6 +462,67 @@ async def run_analysis_pipeline(job_id: str):
         job['completed'] = True
 
 
+# ==================== RETRY PIPELINE ====================
+
+async def retry_leads_pipeline(job_id: str, lead_names: List[str]):
+    """Re-run analysis for specific failed leads"""
+    job = jobs[job_id]
+    try:
+        leads_to_retry = [li for li in job['leads_info'] if li['name'] in lead_names]
+
+        for idx, lead_info in enumerate(leads_to_retry):
+            lead_name = lead_info['name']
+            lead_company = lead_info['company']
+            conv = lead_info.get('conversation', {})
+
+            try:
+                lead_info['status'] = 'processing'
+                lead_info['step'] = 'analyzing'
+                job['status_text'] = f'Retrying {lead_name} ({idx + 1}/{len(leads_to_retry)})...'
+                logger.info(f"[{job_id}] Retrying lead: {lead_name}")
+
+                analysis_prompt = create_analysis_prompt(conv)
+                analysis = await call_openai(analysis_prompt, use_web_search=True, timeout_sec=180)
+                lead_info['analysis'] = analysis
+
+                lead_info['step'] = 'generating_messages'
+                job['status_text'] = f'Generating messages for {lead_name} ({idx + 1}/{len(leads_to_retry)})...'
+
+                msg_prompt = create_messages_prompt(
+                    analysis, lead_name, lead_company, lead_info.get('position', '')
+                )
+                messages_data = await call_openai(msg_prompt, use_web_search=False, timeout_sec=120)
+                lead_info['messages_data'] = messages_data
+                lead_info['error'] = None
+
+                lead_info['status'] = 'done'
+                lead_info['step'] = 'done'
+                logger.info(f"[{job_id}] Retry done: {lead_name}")
+
+            except Exception as e:
+                logger.error(f"[{job_id}] Retry failed for {lead_name}: {e}")
+                lead_info['status'] = 'failed'
+                lead_info['step'] = 'failed'
+                lead_info['error'] = str(e)
+
+            if idx < len(leads_to_retry) - 1:
+                await asyncio.sleep(5)
+
+        done_count = sum(1 for l in job['leads_info'] if l['status'] == 'done')
+        failed_count = sum(1 for l in job['leads_info'] if l['status'] == 'failed')
+        job['processed'] = len(job['leads_info'])
+        job['step'] = 'done'
+        job['completed'] = True
+        job['status_text'] = f'Retry complete! {done_count} successful, {failed_count} failed.'
+
+    except Exception as e:
+        logger.error(f"[{job_id}] Retry pipeline error: {e}")
+        job['step'] = 'error'
+        job['error'] = str(e)
+        job['status_text'] = f'Retry error: {str(e)}'
+        job['completed'] = True
+
+
 # ==================== API ENDPOINTS ====================
 
 @api_router.get("/")
@@ -464,10 +530,20 @@ async def root():
     return {"message": "Interexy Lead Analyzer API"}
 
 
+@api_router.get("/accounts")
+async def get_accounts():
+    """Return available LinkedIn accounts"""
+    return {"accounts": LINKEDIN_ACCOUNTS}
+
+
+class RunAnalysisRequest(BaseModel):
+    account_id: int
+
+
 @api_router.post("/run-analysis")
-async def run_analysis():
+async def run_analysis(request: RunAnalysisRequest):
     """Start the analysis pipeline"""
-    if not HEYREACH_API_KEY or not OPENAI_API_KEY or not LINKEDIN_ACCOUNT_ID:
+    if not HEYREACH_API_KEY or not OPENAI_API_KEY:
         raise HTTPException(status_code=500, detail="Missing API keys configuration")
 
     job_id = str(uuid.uuid4())
@@ -481,11 +557,41 @@ async def run_analysis():
         'leads_info': [],
         'completed': False,
         'error': None,
+        'account_id': request.account_id,
         'created_at': datetime.now(timezone.utc).isoformat()
     }
 
-    asyncio.create_task(run_analysis_pipeline(job_id))
+    asyncio.create_task(run_analysis_pipeline(job_id, request.account_id))
     return {"job_id": job_id, "message": "Analysis started"}
+
+
+class RetryLeadsRequest(BaseModel):
+    job_id: str
+    lead_names: List[str]
+
+
+@api_router.post("/retry-leads")
+async def retry_leads(request: RetryLeadsRequest):
+    """Retry analysis for specific failed leads"""
+    job = jobs.get(request.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not job.get('completed'):
+        raise HTTPException(status_code=400, detail="Job is still running")
+
+    for lead_info in job['leads_info']:
+        if lead_info['name'] in request.lead_names:
+            lead_info['status'] = 'pending'
+            lead_info['step'] = 'waiting'
+            lead_info['error'] = None
+
+    job['completed'] = False
+    job['step'] = 'retrying'
+    job['status_text'] = f'Retrying {len(request.lead_names)} lead(s)...'
+    job['error'] = None
+
+    asyncio.create_task(retry_leads_pipeline(request.job_id, request.lead_names))
+    return {"message": f"Retry started for {len(request.lead_names)} lead(s)"}
 
 
 @api_router.get("/status/{job_id}")

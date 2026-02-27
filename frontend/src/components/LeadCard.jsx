@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import {
   ChevronDown,
@@ -16,16 +17,21 @@ import {
 } from "lucide-react";
 import { MessageGroup } from "@/components/MessageGroup";
 
-export function LeadCard({ lead, index }) {
+export function LeadCard({ lead, index, isSelected, onSelect }) {
   const [expanded, setExpanded] = useState(false);
 
   if (lead.status === "failed") {
     return (
       <div
-        className="bg-white rounded-lg border border-red-200 shadow-sm p-5"
+        className={`bg-white rounded-lg border shadow-sm p-5 transition-colors ${isSelected ? "border-amber-400 bg-amber-50/30" : "border-red-200"}`}
         data-testid={`lead-card-${index}`}
       >
         <div className="flex items-start gap-3">
+          <Checkbox
+            checked={!!isSelected}
+            onCheckedChange={onSelect}
+            className="mt-0.5 shrink-0 border-red-300 data-[state=checked]:bg-amber-500 data-[state=checked]:border-amber-500"
+          />
           <AlertCircle className="h-5 w-5 text-red-500 mt-0.5 shrink-0" />
           <div>
             <h3 className="text-base font-semibold text-slate-900">

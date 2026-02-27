@@ -13,7 +13,17 @@ function App() {
   const [results, setResults] = useState(null);
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState(null);
+  const [accounts, setAccounts] = useState([]);
+  const [selectedAccountId, setSelectedAccountId] = useState(null);
   const pollingRef = useRef(null);
+
+  useEffect(() => {
+    axios.get(`${API}/accounts`).then((res) => {
+      const list = res.data.accounts || [];
+      setAccounts(list);
+      if (list.length === 1) setSelectedAccountId(list[0].id);
+    }).catch((e) => console.error("Failed to fetch accounts:", e));
+  }, []);
 
   const stopPolling = useCallback(() => {
     if (pollingRef.current) {
@@ -52,6 +62,10 @@ function App() {
   }, [stopPolling, fetchResults]);
 
   const runAnalysis = useCallback(async () => {
+    if (!selectedAccountId) {
+      toast.error("Please select a LinkedIn account first");
+      return;
+    }
     setIsRunning(true);
     setError(null);
     setStatus(null);
@@ -59,7 +73,7 @@ function App() {
     setJobId(null);
 
     try {
-      const response = await axios.post(`${API}/run-analysis`);
+      const response = await axios.post(`${API}/run-analysis`, { account_id: selectedAccountId });
       const jid = response.data.job_id;
       setJobId(jid);
       toast.success("Analysis started");
@@ -70,7 +84,22 @@ function App() {
       setIsRunning(false);
       toast.error(msg);
     }
-  }, [pollStatus]);
+  }, [selectedAccountId, pollStatus]);
+
+  const retryLeads = useCallback(async (leadNames) => {
+    setIsRunning(true);
+    setError(null);
+    try {
+      await axios.post(`${API}/retry-leads`, { job_id: jobId, lead_names: leadNames });
+      toast.success(`Retrying ${leadNames.length} lead(s)...`);
+      pollStatus(jobId);
+    } catch (e) {
+      const msg = e.response?.data?.detail || e.message || "Retry failed";
+      setError(msg);
+      setIsRunning(false);
+      toast.error(msg);
+    }
+  }, [jobId, pollStatus]);
 
   useEffect(() => {
     return () => stopPolling();
@@ -84,6 +113,11 @@ function App() {
         results={results}
         error={error}
         onRunAnalysis={runAnalysis}
+        onRetryLeads={retryLeads}
+        jobId={jobId}
+        accounts={accounts}
+        selectedAccountId={selectedAccountId}
+        onAccountChange={setSelectedAccountId}
       />
     </div>
   );
