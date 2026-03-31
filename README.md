@@ -5,9 +5,9 @@ B2B sales intelligence tool that automatically analyzes LinkedIn "catch-up" lead
 ## How It Works
 
 1. Fetches unread LinkedIn conversations from HeyReach
-2. Filters for "catch-up" leads — contacts who replied with thanks to a congratulation message
-3. For each lead: runs deep AI research (company info, funding, news, pain points) via GPT-4o with web search
-4. Generates 10–15 personalized follow-up message variants per lead
+2. Classifies each conversation by intent type (interested, catchup_thanks, soft_objection, hard_rejection, question, redirect, ooo, hiring, competitor, neutral) using GPT-4o-mini
+3. For each lead with a recent reply: runs deep AI research (company info, funding, news, pain points) via GPT-4o with web search
+4. Generates 10–15 personalized follow-up message variants per lead, with prompt selected by intent type
 5. Displays results with fit scores, executive summaries, and recommended messages
 
 ---
@@ -29,6 +29,11 @@ B2B sales intelligence tool that automatically analyzes LinkedIn "catch-up" lead
 lead-gen/
 ├── backend/
 │   ├── server.py          # FastAPI app — all API endpoints and pipeline logic
+│   ├── classifier.py      # Intent classifier (gpt-4o-mini, 10 intent types)
+│   ├── prompts/
+│   │   ├── base_research.py   # Universal lead research prompt (GPT-4o + web search)
+│   │   ├── catchup.py         # Message generation for catchup / general leads
+│   │   └── no_thanks.py       # Message generation for soft objection leads
 │   ├── requirements.txt   # Python dependencies
 │   └── .env               # API keys (not committed to git)
 └── frontend/
@@ -49,8 +54,8 @@ lead-gen/
 ### Prerequisites
 
 - Python 3.11+
-- Node.js 18+
-- npm
+- Node.js 18+ — **system-wide installation required**: download from [nodejs.org](https://nodejs.org/) (LTS version recommended). Do **not** rely on a Node.js bundled inside a Python virtualenv — it won't be accessible from a regular terminal.
+- npm (bundled with Node.js)
 
 ### 1. Clone and configure environment
 
@@ -69,9 +74,8 @@ REACT_APP_BACKEND_URL=http://localhost:8000
 ### 2. Start backend
 
 ```bash
-cd backend
-pip install -r requirements.txt
-uvicorn server:app --reload --port 8000
+pip install -r backend/requirements.txt
+uvicorn backend.server:app --reload --port 8000
 ```
 
 ### 3. Start frontend
@@ -84,6 +88,8 @@ npm start
 
 Frontend: **http://localhost:3000**
 Backend API docs: **http://localhost:8000/docs**
+
+> All commands above are run from the repository root (`lead-gen/`), except `npm` commands which require `cd frontend` first.
 
 ---
 
@@ -137,6 +143,7 @@ LINKEDIN_ACCOUNTS=[
 
 | Problem | Solution |
 |---------|----------|
+| `npm: command not found` / `npm is not recognized` | Node.js is not installed system-wide. Download and install it from [nodejs.org](https://nodejs.org/) (LTS). A Node.js that lives inside a Python venv is not on your PATH. |
 | `npm install` fails with peer dependency error | Use `npm install --legacy-peer-deps` |
 | `emergentintegrations` package not found | Skip it — it's listed in requirements.txt but not used in the code |
 | `Analysis failed: Expecting value: line N column N` | JSON parsing error from OpenAI — handled automatically by `json-repair`. Retry the lead using the "Retry Selected" button |

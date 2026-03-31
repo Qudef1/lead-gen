@@ -85,3 +85,5 @@ android-sdk/ -e
 *.env.*
 backend/.env
 frontend/.env
+
+.TASKS
