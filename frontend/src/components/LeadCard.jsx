@@ -34,10 +34,11 @@ export function LeadCard({ lead, index, isSelected, onSelect }) {
           />
           <AlertCircle className="h-5 w-5 text-red-500 mt-0.5 shrink-0" />
           <div>
-            <h3 className="text-base font-semibold text-slate-900">
+            <h3 className="text-base font-semibold text-slate-900 flex items-center gap-2 flex-wrap">
               {lead.name || "Unknown Lead"}
+              {lead.intent && <IntentBadge intent={lead.intent} />}
               {lead.company && (
-                <span className="text-slate-400 font-normal ml-2">@ {lead.company}</span>
+                <span className="text-slate-400 font-normal">@ {lead.company}</span>
               )}
             </h3>
             <p className="text-sm text-red-600 mt-1">
@@ -71,6 +72,7 @@ export function LeadCard({ lead, index, isSelected, onSelect }) {
               <h3 className="text-base font-semibold text-[#1a2744] truncate">
                 {lead.name}
               </h3>
+              {lead.intent && <IntentBadge intent={lead.intent} />}
               {lead.profileUrl && (
                 <a
                   href={lead.profileUrl}
@@ -191,6 +193,31 @@ export function LeadCard({ lead, index, isSelected, onSelect }) {
         </div>
       )}
     </div>
+  );
+}
+
+const INTENT_META = {
+  interested:       { label: "Interested",       color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  catchup_thanks:   { label: "Catch-up / Thanks", color: "bg-sky-50 text-sky-700 border-sky-200" },
+  soft_objection:   { label: "Soft Objection",   color: "bg-amber-50 text-amber-700 border-amber-200" },
+  hard_rejection:   { label: "Hard Rejection",   color: "bg-red-50 text-red-700 border-red-200" },
+  ooo:              { label: "Out of Office",     color: "bg-slate-100 text-slate-500 border-slate-200" },
+  hiring:           { label: "Hiring",            color: "bg-violet-50 text-violet-700 border-violet-200" },
+  question:         { label: "Question",          color: "bg-blue-50 text-blue-700 border-blue-200" },
+  redirect:         { label: "Redirect",          color: "bg-orange-50 text-orange-700 border-orange-200" },
+  not_relevant:     { label: "Not Relevant",      color: "bg-slate-100 text-slate-400 border-slate-200" },
+  other:            { label: "Other",             color: "bg-slate-100 text-slate-500 border-slate-200" },
+};
+
+function IntentBadge({ intent }) {
+  const meta = INTENT_META[intent] || { label: intent, color: "bg-slate-100 text-slate-500 border-slate-200" };
+  return (
+    <span
+      className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${meta.color}`}
+      title="Detected intent"
+    >
+      {meta.label}
+    </span>
   );
 }
 
