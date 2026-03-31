@@ -111,14 +111,20 @@ class TestKeywordFallbackIntent:
         ("", "neutral"),
     ])
     def test_keyword_matching(self, text, expected):
-        assert _keyword_fallback_intent(text) == expected
+        assert _keyword_fallback_intent(text, "CORRESPONDENT") == expected
 
     def test_none_input_returns_neutral(self):
-        assert _keyword_fallback_intent(None) == "neutral"
+        assert _keyword_fallback_intent(None, "CORRESPONDENT") == "neutral"
 
     def test_case_insensitive(self):
-        assert _keyword_fallback_intent("THANKS!") == "catchup_thanks"
-        assert _keyword_fallback_intent("OUT OF OFFICE") == "ooo"
+        assert _keyword_fallback_intent("THANKS!", "CORRESPONDENT") == "catchup_thanks"
+        assert _keyword_fallback_intent("OUT OF OFFICE", "CORRESPONDENT") == "ooo"
+
+    def test_me_sender_always_returns_neutral(self):
+        # Even if the text contains keywords, ME-authored text must not drive intent
+        assert _keyword_fallback_intent("Tell me more about what you do", "ME") == "neutral"
+        assert _keyword_fallback_intent("Thank you so much!", "ME") == "neutral"
+        assert _keyword_fallback_intent("Please remove me", "ME") == "neutral"
 
 
 # ---------------------------------------------------------------------------

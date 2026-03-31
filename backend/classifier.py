@@ -74,8 +74,11 @@ def _has_correspondent_in_last_5(conversation: dict) -> bool:
     return any(msg.get('sender') != 'ME' for msg in recent)
 
 
-def _keyword_fallback_intent(last_text: str) -> str:
-    """Determine intent via keyword matching as fallback"""
+def _keyword_fallback_intent(last_text: str, last_sender: str = "CORRESPONDENT") -> str:
+    """Determine intent via keyword matching as fallback.
+    Only uses the text if it was sent by CORRESPONDENT; returns 'neutral' for ME-authored text."""
+    if last_sender == "ME":
+        return "neutral"
     text_lower = (last_text or '').lower()
     for intent, keywords in _FALLBACK_KEYWORDS.items():
         if any(kw in text_lower for kw in keywords):
@@ -178,13 +181,28 @@ Return ONLY valid JSON:
 
         # Validate intent values, fall back to keyword matching if invalid
         valid_intents = set(INTENT_TYPES)
+        classified_indices = {item.get('index') for item in classifications}
+
+        # Ensure one output per candidate — fill in any missing entries
+        for candidate in candidates:
+            idx = candidate['index']
+            if idx not in classified_indices:
+                last_text = conversations[idx].get('lastMessageText', '')
+                last_sender = conversations[idx].get('lastMessageSender', 'CORRESPONDENT')
+                classifications.append({
+                    "index": idx,
+                    "intent": _keyword_fallback_intent(last_text, last_sender),
+                    "confidence": "low",
+                    "reasoning": "Missing from LLM output — keyword fallback applied",
+                })
+
         for item in classifications:
             if item.get('intent') not in valid_intents:
-                # Find the conversation by index and do keyword fallback
                 idx = item.get('index', -1)
                 if 0 <= idx < len(conversations):
                     last_text = conversations[idx].get('lastMessageText', '')
-                    item['intent'] = _keyword_fallback_intent(last_text)
+                    last_sender = conversations[idx].get('lastMessageSender', 'CORRESPONDENT')
+                    item['intent'] = _keyword_fallback_intent(last_text, last_sender)
                     item['confidence'] = 'low'
 
         return classifications
@@ -196,7 +214,8 @@ Return ONLY valid JSON:
         for candidate in candidates:
             idx = candidate['index']
             last_text = conversations[idx].get('lastMessageText', '')
-            intent = _keyword_fallback_intent(last_text)
+            last_sender = conversations[idx].get('lastMessageSender', 'CORRESPONDENT')
+            intent = _keyword_fallback_intent(last_text, last_sender)
             results.append({
                 "index": idx,
                 "intent": intent,
