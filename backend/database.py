@@ -122,7 +122,13 @@ def init_db():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_leads_conversation ON leads(conversation_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_queue_status ON processing_queue(status)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_queue_conversation ON processing_queue(conversation_id)")
-        
+
+        # Add last_message_at column if it doesn't exist yet (safe to re-run)
+        try:
+            cursor.execute("ALTER TABLE leads ADD COLUMN last_message_at TEXT")
+        except Exception:
+            pass  # column already exists
+
         conn.commit()
         logger.info("Database initialized successfully")
 
@@ -550,3 +556,28 @@ def get_queue_stats() -> Dict[str, Any]:
             stats[status] = cursor.fetchone()[0]
         
         return stats
+
+
+def update_last_message_at(conversation_id: str, timestamp_iso: str):
+    """Update the last_message_at timestamp for a lead."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE leads SET last_message_at = ? WHERE conversation_id = ?",
+            (timestamp_iso, conversation_id)
+        )
+        conn.commit()
+
+
+def get_lead_analysis_time(conversation_id: str) -> Optional[str]:
+    """Return the analyzed_at ISO timestamp from the analyses table, or None if not yet analyzed."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT a.analyzed_at
+            FROM analyses a
+            JOIN leads l ON a.lead_id = l.id
+            WHERE l.conversation_id = ?
+        """, (conversation_id,))
+        row = cursor.fetchone()
+        return row['analyzed_at'] if row else None

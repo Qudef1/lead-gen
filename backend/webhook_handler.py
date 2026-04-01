@@ -4,9 +4,24 @@ Processes EVERY_MESSAGE_REPLY_RECEIVED events and queues conversations for analy
 """
 import logging
 import httpx
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_message_timestamp(data: Dict[str, Any]) -> str:
+    """Extract message timestamp from webhook payload.
+
+    HeyReach may use different field names; fall back to current UTC time
+    if none are found so we always have a value to compare.
+    """
+    message = data.get('message', {})
+    for field in ('sentAt', 'timestamp', 'createdAt', 'sent_at', 'created_at'):
+        value = message.get(field)
+        if value:
+            return str(value)
+    return datetime.now(timezone.utc).isoformat()
 
 
 async def fetch_conversation_from_heyreach(conversation_id: str, account_id: int) -> Optional[Dict[str, Any]]:
@@ -67,9 +82,12 @@ async def process_webhook_event(event_data: Dict[str, Any]) -> bool:
         }
     }
     
+    Re-queues analysis whenever the incoming message is newer than the last
+    stored analysis, so fresh replies always trigger a fresh run.
+
     Returns True if successfully queued, False otherwise.
     """
-    from database import add_to_queue, save_lead, get_lead_by_conversation_id
+    from database import add_to_queue, save_lead, get_lead_analysis_time, update_last_message_at
     
     event_type = event_data.get('event', '')
     data = event_data.get('data', {})
@@ -84,21 +102,11 @@ async def process_webhook_event(event_data: Dict[str, Any]) -> bool:
     if not conversation_id or not account_id:
         logger.error(f"Missing conversationId or linkedInAccountId in webhook data: {data}")
         return False
-    
-    # Check if lead already exists and is fully processed
-    existing_lead = get_lead_by_conversation_id(conversation_id)
-    if existing_lead and existing_lead.get('messages'):
-        logger.info(f"Lead {conversation_id} already processed, skipping")
-        return False
-    
-    # Add to processing queue (will skip if already pending/processing)
-    queue_id = add_to_queue(conversation_id, account_id)
-    
-    if queue_id is None:
-        logger.info(f"Conversation {conversation_id} already in queue")
-        return False
-    
-    # Save/update lead profile from webhook data
+
+    # Extract the timestamp of the incoming message
+    message_ts = _extract_message_timestamp(data)
+
+    # Save/update lead profile from webhook data early so last_message_at can be set
     correspondent = data.get('correspondent', {})
     if correspondent:
         profile = {
@@ -111,6 +119,27 @@ async def process_webhook_event(event_data: Dict[str, Any]) -> bool:
             'headline': correspondent.get('headline', ''),
         }
         save_lead(conversation_id, account_id, profile)
-    
-    logger.info(f"Queued conversation {conversation_id} for account {account_id} (queue_id={queue_id})")
+
+    # Record when this message arrived
+    update_last_message_at(conversation_id, message_ts)
+
+    # Decide whether to re-run analysis
+    analyzed_at = get_lead_analysis_time(conversation_id)
+    if analyzed_at and analyzed_at >= message_ts:
+        logger.info(
+            f"Lead {conversation_id} analysis is up to date "
+            f"(analyzed_at={analyzed_at}, message_ts={message_ts}), skipping"
+        )
+        return False
+
+    # Queue for (re-)analysis — add_to_queue skips if already pending/processing
+    queue_id = add_to_queue(conversation_id, account_id)
+    if queue_id is None:
+        logger.info(f"Conversation {conversation_id} already in queue")
+        return False
+
+    logger.info(
+        f"Queued conversation {conversation_id} for account {account_id} "
+        f"(queue_id={queue_id}, message_ts={message_ts}, analyzed_at={analyzed_at})"
+    )
     return True
