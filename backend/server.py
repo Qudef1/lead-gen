@@ -113,22 +113,30 @@ async def call_openai(prompt: str, use_web_search: bool = False, timeout_sec: in
         return parse_json_from_text(output_text)
 
 
-async def call_openai_chat(system_prompt: str, messages: list, timeout_sec: int = 60) -> str:
-    """Call OpenAI Chat Completions API with a full conversation history.
+async def call_openai_chat(system_prompt: str, messages: list, timeout_sec: int = 90) -> str:
+    """Call OpenAI Responses API for the per-lead chat with web search enabled.
+
+    Uses the same Responses API as the analysis pipeline so that web_search is
+    available. The system prompt is passed as a 'developer' role message at
+    position 0 of the input array, followed by the full conversation history.
 
     Args:
         system_prompt: System message providing lead context.
         messages: List of {role, content} dicts representing the conversation so far.
-        timeout_sec: Request timeout in seconds.
+        timeout_sec: Request timeout in seconds (longer than plain chat due to web search).
 
     Returns:
         The assistant reply as a plain string.
     """
-    url = "https://api.openai.com/v1/chat/completions"
+    url = "https://api.openai.com/v1/responses"
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
     payload = {
-        "model": "gpt-4o",
-        "messages": [{"role": "system", "content": system_prompt}] + messages,
+        "model": "gpt-5.1",
+        "tools": [{"type": "web_search"}],
+        "input": [
+            {"role": "developer", "content": system_prompt},
+            *[{"role": m["role"], "content": m["content"]} for m in messages],
+        ],
     }
 
     async with httpx.AsyncClient(timeout=timeout_sec) as client:
@@ -136,7 +144,10 @@ async def call_openai_chat(system_prompt: str, messages: list, timeout_sec: int 
         if response.status_code != 200:
             raise Exception(f"OpenAI API error: {response.status_code} - {response.text[:500]}")
         data = response.json()
-        return data["choices"][0]["message"]["content"]
+        reply = extract_openai_text(data)
+        if not reply:
+            raise Exception("No output_text in OpenAI response")
+        return reply
 
 
 
