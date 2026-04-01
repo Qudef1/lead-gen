@@ -2,6 +2,34 @@ import json
 
 
 def create_catchup_messages_prompt(analysis: dict, lead_name: str, lead_company: str, lead_position: str, intent: str = "catchup_thanks") -> str:
+    """
+    Router function that delegates to intent-specific message generation functions.
+    
+    For 'catchup_thanks' and generic cases, uses the original catchup logic.
+    For other intents, delegates to specialized modules.
+    """
+    # Delegate to specialized modules based on intent
+    if intent == 'interested':
+        from .interested import create_interested_messages_prompt
+        return create_interested_messages_prompt(analysis, lead_name, lead_company, lead_position)
+    
+    elif intent == 'hard_rejection':
+        from .hard_rejection import create_hard_rejection_messages_prompt
+        return create_hard_rejection_messages_prompt(analysis, lead_name, lead_company, lead_position)
+    
+    elif intent == 'question':
+        from .question import create_question_messages_prompt
+        return create_question_messages_prompt(analysis, lead_name, lead_company, lead_position)
+    
+    elif intent == 'redirect':
+        from .redirect import create_redirect_messages_prompt
+        return create_redirect_messages_prompt(analysis, lead_name, lead_company, lead_position)
+    
+    # For catchup_thanks, ooo, hiring, neutral, and other cases, use original catchup logic
+    return _create_catchup_messages_prompt_original(analysis, lead_name, lead_company, lead_position, intent)
+
+
+def _create_catchup_messages_prompt_original(analysis: dict, lead_name: str, lead_company: str, lead_position: str, intent: str = "catchup_thanks") -> str:
     qual = analysis.get('qualification', {})
     company = analysis.get('company_basics', {})
     pain_points = analysis.get('pain_point_analysis', {})
