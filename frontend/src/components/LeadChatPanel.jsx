@@ -11,7 +11,7 @@ import { Send, Bot, User, Loader2, Info } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8000";
 
-export function LeadChatPanel({ lead, jobId, isOpen, onClose }) {
+export function LeadChatPanel({ lead, isOpen, onClose }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -45,7 +45,7 @@ export function LeadChatPanel({ lead, jobId, isOpen, onClose }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          job_id: jobId,
+          conversation_id: lead.conversation_id,
           lead_name: lead.name,
           messages: updatedMessages,
         }),

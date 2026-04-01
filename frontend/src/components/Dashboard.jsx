@@ -336,7 +336,6 @@ export function Dashboard({
                   key={idx}
                   lead={leadResult}
                   index={idx}
-                  jobId={jobId}
                   isSelected={selectedLeads.has(leadResult.name)}
                   onSelect={() => toggleSelect(leadResult.name)}
                   onDelete={handleDelete}

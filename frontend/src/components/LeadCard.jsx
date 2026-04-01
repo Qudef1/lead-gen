@@ -20,7 +20,7 @@ import {
 import { MessageGroup } from "@/components/MessageGroup";
 import { LeadChatPanel } from "@/components/LeadChatPanel";
 
-export function LeadCard({ lead, index, isSelected, onSelect, jobId, onDelete }) {
+export function LeadCard({ lead, index, isSelected, onSelect, onDelete }) {
   const [expanded, setExpanded] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
 
@@ -135,7 +135,7 @@ export function LeadCard({ lead, index, isSelected, onSelect, jobId, onDelete })
               {lead.messages.length} messages
             </span>
           )}
-          {jobId && (
+          {lead.conversation_id && (
             <button
               onClick={(e) => { e.stopPropagation(); setChatOpen(true); }}
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-[#10b981] border border-[#10b981]/30 bg-emerald-50 hover:bg-emerald-100 hover:border-[#10b981]/60 transition-colors"
@@ -224,10 +224,9 @@ export function LeadCard({ lead, index, isSelected, onSelect, jobId, onDelete })
       )}
 
       {/* Per-lead AI chat panel */}
-      {jobId && (
+      {lead.conversation_id && (
         <LeadChatPanel
           lead={lead}
-          jobId={jobId}
           isOpen={chatOpen}
           onClose={() => setChatOpen(false)}
         />

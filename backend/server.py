@@ -11,7 +11,7 @@ import hashlib
 import httpx
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 from json_repair import repair_json
 
@@ -652,42 +652,72 @@ class ChatMessageItem(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    job_id: str
-    lead_name: str
+    conversation_id: str          # DB identifier — always available (DB or in-memory)
+    lead_name: str                 # used as fallback label if DB has no name yet
     messages: List[ChatMessageItem]
+    job_id: Optional[str] = None  # kept for backward compatibility only
 
 
 @api_router.post("/chat")
 async def chat_with_lead(request: ChatRequest):
-    """Chat with GPT-4o about a specific lead using that lead's full analysis as context."""
-    job = jobs.get(request.job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+    """Chat with GPT-5.1 (+ web search) about a specific lead.
 
-    lead = next(
-        (li for li in job.get('leads_info', []) if li.get('name') == request.lead_name),
-        None
-    )
-    if lead is None:
-        raise HTTPException(status_code=404, detail=f"Lead '{request.lead_name}' not found in job")
+    Lookup order:
+    1. SQLite DB by conversation_id (works after page reload or webhook-triggered analysis)
+    2. In-memory job store by job_id + lead_name (fallback for leads from current session
+       that haven't been persisted yet)
+    """
+    from database import get_lead_by_conversation_id as db_get_lead
 
-    analysis = lead.get('analysis', {})
-    lead_context = {
-        'name': lead.get('name', ''),
-        'company': lead.get('company', ''),
-        'position': lead.get('position', ''),
-        'location': lead.get('location', ''),
-        'intent': lead.get('intent', ''),
-        'intent_confidence': lead.get('intent_confidence', ''),
-        'executive_summary': analysis.get('executive_summary', ''),
-        'analysis': analysis,
-    }
+    lead_context = None
+
+    # --- Primary: DB lookup ---
+    db_lead = db_get_lead(request.conversation_id)
+    if db_lead:
+        analysis = db_lead.get('analysis', {})
+        lead_context = {
+            'name': db_lead.get('full_name') or request.lead_name,
+            'company': db_lead.get('company_name', ''),
+            'position': db_lead.get('position', ''),
+            'location': db_lead.get('location', ''),
+            'intent': db_lead.get('intent', ''),
+            'intent_confidence': db_lead.get('confidence', ''),
+            'executive_summary': analysis.get('executive_summary', ''),
+            'analysis': analysis,
+        }
+
+    # --- Fallback: in-memory job store ---
+    if lead_context is None and request.job_id:
+        job = jobs.get(request.job_id)
+        if job:
+            mem_lead = next(
+                (li for li in job.get('leads_info', []) if li.get('name') == request.lead_name),
+                None
+            )
+            if mem_lead:
+                analysis = mem_lead.get('analysis', {})
+                lead_context = {
+                    'name': mem_lead.get('name', request.lead_name),
+                    'company': mem_lead.get('company', ''),
+                    'position': mem_lead.get('position', ''),
+                    'location': mem_lead.get('location', ''),
+                    'intent': mem_lead.get('intent', ''),
+                    'intent_confidence': mem_lead.get('intent_confidence', ''),
+                    'executive_summary': analysis.get('executive_summary', ''),
+                    'analysis': analysis,
+                }
+
+    if lead_context is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Lead '{request.lead_name}' not found in DB or active job"
+        )
 
     system_prompt = create_chat_system_prompt(lead_context)
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
 
     try:
-        reply = await call_openai_chat(system_prompt, messages, timeout_sec=60)
+        reply = await call_openai_chat(system_prompt, messages, timeout_sec=90)
     except Exception as e:
         logger.error(f"Chat error for lead {request.lead_name}: {e}")
         raise HTTPException(status_code=500, detail=f"OpenAI request failed: {str(e)}")
