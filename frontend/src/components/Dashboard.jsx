@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { LeadCard } from "@/components/LeadCard";
+import { toast } from "sonner";
 import {
   Select,
   SelectContent,
@@ -22,7 +23,10 @@ import {
   RefreshCw,
   Inbox,
   Clock,
+  Trash2,
 } from "lucide-react";
+
+const API = process.env.REACT_APP_BACKEND_URL + '/api';
 
 export function Dashboard({ 
   isRunning, 
@@ -54,20 +58,54 @@ export function Dashboard({
     setSelectedLeads(new Set());
     onRetryLeads(names);
   };
+
+  const handleDelete = async (lead) => {
+    if (!window.confirm(`Are you sure you want to delete "${lead.name}"? This action cannot be undone.`)) {
+      return;
+    }
+    
+    try {
+      // Get conversation_id from the lead data (passed from DB)
+      const conversationId = lead.conversation_id || lead.profile_url;
+      
+      if (!conversationId) {
+        toast.error("Cannot delete lead: missing conversation ID");
+        return;
+      }
+      
+      const response = await fetch(`${API}/leads/${conversationId}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok) {
+        toast.success(`Lead "${lead.name}" deleted`);
+        // Reload the page to refresh data
+        setTimeout(() => window.location.reload(), 1000);
+      } else {
+        // Handle HTTP errors
+        const errorMsg = data?.detail || data?.message || `HTTP ${response.status}`;
+        toast.error(`Failed to delete: ${errorMsg}`);
+      }
+    } catch (e) {
+      // Handle network errors or other exceptions
+      console.error('Delete error:', e);
+      toast.error(`Failed to delete: ${e.message || 'Network error'}`);
+    }
+  };
   
-  // Use DB results if available, otherwise use job results
-  const displayResults = results?.results?.length > 0 ? results : null;
+  // Only use DB leads - results from job is only for manual analysis progress
+  const hasDbLeads = leadsFromDb.length > 0;
+  const dbDoneCount = leadsFromDb.filter((l) => l.messages).length || 0;
+  const dbPendingCount = queueStats?.pending || 0;
   const totalLeads = status?.total_leads || 0;
   const processed = status?.processed || 0;
   const progressPercent = totalLeads > 0 ? Math.round((processed / totalLeads) * 100) : 0;
   const isComplete = status?.completed;
-  const hasResults = displayResults?.results?.length > 0;
-  const hasDbLeads = leadsFromDb.length > 0;
-
-  const doneCount = displayResults?.results?.filter((r) => r.status === "done").length || 0;
-  const failedCount = displayResults?.results?.filter((r) => r.status === "failed").length || 0;
-  const dbDoneCount = leadsFromDb.filter((l) => l.messages).length || 0;
-  const dbPendingCount = queueStats?.pending || 0;
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-8">
@@ -236,12 +274,12 @@ export function Dashboard({
         </div>
       )}
 
-      {/* Results Summary - from DB */}
+      {/* Unread Leads from DB */}
       {hasDbLeads && !isRunning && (
         <section data-testid="results-section">
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-2xl font-semibold tracking-tight text-[#1a2744]">
-              Ready Leads
+              Unread Leads
             </h2>
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-1.5 text-sm text-slate-500">
@@ -260,12 +298,22 @@ export function Dashboard({
                   <span>{dbPendingCount} processing</span>
                 </div>
               )}
+              <Button
+                onClick={() => window.location.reload()}
+                variant="outline"
+                size="sm"
+                className="h-8"
+              >
+                <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                Refresh
+              </Button>
             </div>
           </div>
 
           <div className="space-y-4" data-testid="results-list">
             {leadsFromDb.map((lead, idx) => {
               const leadResult = {
+                conversation_id: lead.conversation_id,
                 name: lead.full_name || "Unknown",
                 company: lead.company_name || "",
                 position: lead.position || "",
@@ -290,61 +338,10 @@ export function Dashboard({
                   index={idx}
                   isSelected={selectedLeads.has(leadResult.name)}
                   onSelect={() => toggleSelect(leadResult.name)}
+                  onDelete={handleDelete}
                 />
               );
             })}
-          </div>
-        </section>
-      )}
-
-      {/* Results Summary - from job */}
-      {hasResults && (
-        <section data-testid="results-section">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-2xl font-semibold tracking-tight text-[#1a2744]">
-              Results
-            </h2>
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-1.5 text-sm text-slate-500">
-                <Users className="h-4 w-4" />
-                <span>{displayResults.results.length} leads</span>
-              </div>
-              {doneCount > 0 && (
-                <div className="flex items-center gap-1.5 text-sm text-emerald-600">
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span>{doneCount} analyzed</span>
-                </div>
-              )}
-              {failedCount > 0 && (
-                <div className="flex items-center gap-1.5 text-sm text-red-500">
-                  <XCircle className="h-4 w-4" />
-                  <span>{failedCount} failed</span>
-                </div>
-              )}
-              {selectedLeads.size > 0 && (
-                <Button
-                  onClick={handleRetry}
-                  disabled={isRunning}
-                  size="sm"
-                  className="bg-amber-500 hover:bg-amber-600 text-white font-semibold"
-                >
-                  <RefreshCw className="mr-1.5 h-4 w-4" />
-                  Retry Selected ({selectedLeads.size})
-                </Button>
-              )}
-            </div>
-          </div>
-
-          <div className="space-y-4" data-testid="results-list">
-            {displayResults.results.map((lead, idx) => (
-              <LeadCard
-                key={idx}
-                lead={lead}
-                index={idx}
-                isSelected={selectedLeads.has(lead.name)}
-                onSelect={() => toggleSelect(lead.name)}
-              />
-            ))}
           </div>
         </section>
       )}

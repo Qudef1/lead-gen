@@ -14,10 +14,11 @@ import {
   Star,
   ExternalLink,
   AlertCircle,
+  Trash2,
 } from "lucide-react";
 import { MessageGroup } from "@/components/MessageGroup";
 
-export function LeadCard({ lead, index, isSelected, onSelect }) {
+export function LeadCard({ lead, index, isSelected, onSelect, onDelete }) {
   const [expanded, setExpanded] = useState(false);
 
   if (lead.status === "failed") {
@@ -110,6 +111,22 @@ export function LeadCard({ lead, index, isSelected, onSelect }) {
         </div>
 
         <div className="flex items-center gap-3 shrink-0 ml-4">
+          {/* Delete button - stop propagation to prevent card toggle */}
+          {onDelete && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(lead);
+              }}
+              className="h-8 w-8 p-0 text-slate-400 hover:text-red-500 hover:bg-red-50"
+              title="Delete lead"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
+          
           {lead.messages?.length > 0 && (
             <span className="text-xs text-slate-400">
               {lead.messages.length} messages

@@ -501,6 +501,44 @@ def get_all_leads_for_account(account_id: int) -> List[Dict[str, Any]]:
         return results
 
 
+def delete_lead(conversation_id: str) -> bool:
+    """
+    Delete a lead and all associated data (classifications, analyses, messages).
+    Returns True if deleted, False if not found.
+    """
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            # Check if lead exists
+            cursor.execute("SELECT id FROM leads WHERE conversation_id = ?", (conversation_id,))
+            row = cursor.fetchone()
+
+            if not row:
+                logger.warning(f"Lead not found for deletion: {conversation_id}")
+                return False
+
+            lead_id = row['id']
+            logger.info(f"Deleting lead {lead_id} (conversation_id={conversation_id})")
+
+            # Delete in order (foreign key constraints)
+            cursor.execute("DELETE FROM messages WHERE lead_id = ?", (lead_id,))
+            cursor.execute("DELETE FROM analyses WHERE lead_id = ?", (lead_id,))
+            cursor.execute("DELETE FROM classifications WHERE lead_id = ?", (lead_id,))
+            cursor.execute("DELETE FROM lead_profiles WHERE lead_id = ?", (lead_id,))
+            cursor.execute("DELETE FROM leads WHERE id = ?", (lead_id,))
+
+            # Also remove from processing queue
+            cursor.execute("DELETE FROM processing_queue WHERE conversation_id = ?", (conversation_id,))
+
+            conn.commit()
+            logger.info(f"Deleted lead {conversation_id} and all associated data")
+            return True
+    except Exception as e:
+        logger.error(f"Error deleting lead {conversation_id}: {e}", exc_info=True)
+        raise
+
+
 def get_queue_stats() -> Dict[str, Any]:
     """Get processing queue statistics"""
     with get_db_connection() as conn:

@@ -7,6 +7,7 @@ import logging
 import uuid
 import asyncio
 import json
+import hashlib
 import httpx
 from datetime import datetime, timezone
 from pathlib import Path
@@ -214,7 +215,25 @@ async def run_analysis_pipeline(job_id: str, account_id: int):
 
                 # Save lead to DB
                 profile = conv.get('correspondentProfile', {})
-                conversation_id = conv.get('conversationId', str(uuid.uuid4()))
+                # Use conversationId from HeyReach, or generate from profile URL + account_id for stability
+                conversation_id = conv.get('conversationId')
+                if not conversation_id:
+                    # Fallback: use profile URL + account_id as stable identifier
+                    profile_url = profile.get('profileUrl', '')
+                    if profile_url:
+                        unique_str = f"{profile_url}:{account_id}"
+                        conversation_id = hashlib.sha256(unique_str.encode()).hexdigest()[:16]
+                    else:
+                        conversation_id = str(uuid.uuid4())
+                
+                # Check if lead already exists (for logging)
+                from database import get_lead_by_conversation_id
+                existing_lead = get_lead_by_conversation_id(conversation_id)
+                if existing_lead:
+                    logger.info(f"[{job_id}] Updating existing lead: {lead_name} (conversation_id={conversation_id})")
+                else:
+                    logger.info(f"[{job_id}] Creating new lead: {lead_name} (conversation_id={conversation_id})")
+                
                 lead_id = save_lead(conversation_id, account_id, profile)
 
                 # Save classification
@@ -420,18 +439,42 @@ async def get_all_leads():
     """Get all leads from all accounts (for debugging)"""
     import sqlite3
     from database import get_db_connection
-    
+
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT DISTINCT account_id FROM leads")
         account_ids = [row[0] for row in cursor.fetchall()]
-    
+
     all_leads = []
     for acc_id in account_ids:
         leads = get_all_leads_for_account(acc_id)
         all_leads.extend(leads)
-    
+
     return {"leads": all_leads, "total": len(all_leads)}
+
+
+@api_router.delete("/leads/{conversation_id}")
+async def delete_lead(conversation_id: str):
+    """
+    Delete a lead and all associated data (classifications, analyses, messages).
+    """
+    try:
+        from database import delete_lead as db_delete_lead
+        
+        logger.info(f"Attempting to delete lead: {conversation_id}")
+        deleted = db_delete_lead(conversation_id)
+        
+        if deleted:
+            logger.info(f"Successfully deleted lead: {conversation_id}")
+            return {"status": "success", "message": f"Lead {conversation_id} deleted"}
+        else:
+            logger.warning(f"Lead not found: {conversation_id}")
+            raise HTTPException(status_code=404, detail="Lead not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting lead {conversation_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to delete lead: {str(e)}")
 
 
 class RunAnalysisRequest(BaseModel):
