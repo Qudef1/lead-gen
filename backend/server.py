@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Request
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 import os
@@ -7,10 +7,11 @@ import logging
 import uuid
 import asyncio
 import json
+import hashlib
 import httpx
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 from json_repair import repair_json
 
@@ -23,6 +24,8 @@ load_dotenv(ROOT_DIR / '.env')
 
 from classifier import classify_conversations
 from prompts import create_analysis_prompt, create_catchup_messages_prompt, create_no_thanks_messages_prompt, create_chat_system_prompt
+from database import init_db, get_all_leads_for_account, get_lead_by_conversation_id, get_queue_stats
+from webhook_handler import process_webhook_event
 
 HEYREACH_API_KEY = os.environ.get('HEYREACH_API_KEY')
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
@@ -38,6 +41,18 @@ jobs: Dict[str, Dict[str, Any]] = {}
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+
+# Initialize database on startup
+@app.on_event("startup")
+async def startup_event():
+    init_db()
+    logger.info("Database initialized")
+    
+    # Start background queue processor
+    from queue_processor import start_queue_processor
+    start_queue_processor()
+    logger.info("Background queue processor started")
 
 
 # ==================== HEYREACH API ====================
@@ -155,6 +170,8 @@ async def call_openai_chat(system_prompt: str, messages: list, timeout_sec: int 
 
 async def run_analysis_pipeline(job_id: str, account_id: int):
     """Main analysis pipeline running in background"""
+    from database import save_lead, save_classification, save_analysis, save_messages
+    
     job = jobs[job_id]
     try:
         # Step 1: Fetch conversations
@@ -233,9 +250,39 @@ async def run_analysis_pipeline(job_id: str, account_id: int):
                 job['status_text'] = f'Analyzing {lead_name} [{intent}] ({idx + 1}/{len(classified_convs)})...'
                 logger.info(f"[{job_id}] Analyzing lead {idx + 1}: {lead_name} (intent={intent})")
 
+                # Save lead to DB
+                profile = conv.get('correspondentProfile', {})
+                # Use conversationId from HeyReach, or generate from profile URL + account_id for stability
+                conversation_id = conv.get('conversationId')
+                if not conversation_id:
+                    # Fallback: use profile URL + account_id as stable identifier
+                    profile_url = profile.get('profileUrl', '')
+                    if profile_url:
+                        unique_str = f"{profile_url}:{account_id}"
+                        conversation_id = hashlib.sha256(unique_str.encode()).hexdigest()[:16]
+                    else:
+                        conversation_id = str(uuid.uuid4())
+                
+                # Check if lead already exists (for logging)
+                from database import get_lead_by_conversation_id
+                existing_lead = get_lead_by_conversation_id(conversation_id)
+                if existing_lead:
+                    logger.info(f"[{job_id}] Updating existing lead: {lead_name} (conversation_id={conversation_id})")
+                else:
+                    logger.info(f"[{job_id}] Creating new lead: {lead_name} (conversation_id={conversation_id})")
+                
+                lead_id = save_lead(conversation_id, account_id, profile)
+
+                # Save classification
+                save_classification(lead_id, intent, cls['confidence'], cls.get('reasoning', ''))
+
+                # Deep analysis
                 analysis_prompt = create_analysis_prompt(conv)
                 analysis = await call_openai(analysis_prompt, use_web_search=True, timeout_sec=180)
                 lead_info['analysis'] = analysis
+
+                # Save analysis to DB
+                save_analysis(lead_id, analysis)
 
                 # Select message prompt by intent
                 lead_info['step'] = 'generating_messages'
@@ -253,6 +300,9 @@ async def run_analysis_pipeline(job_id: str, account_id: int):
 
                 messages_data = await call_openai(msg_prompt, use_web_search=False, timeout_sec=120)
                 lead_info['messages_data'] = messages_data
+
+                # Save messages to DB
+                save_messages(lead_id, messages_data)
 
                 lead_info['status'] = 'done'
                 lead_info['step'] = 'done'
@@ -288,6 +338,8 @@ async def run_analysis_pipeline(job_id: str, account_id: int):
 
 async def retry_leads_pipeline(job_id: str, lead_names: List[str]):
     """Re-run analysis for specific failed leads"""
+    from database import save_analysis, save_messages
+    
     job = jobs[job_id]
     try:
         leads_to_retry = [li for li in job['leads_info'] if li['name'] in lead_names]
@@ -307,6 +359,13 @@ async def retry_leads_pipeline(job_id: str, lead_names: List[str]):
                 analysis = await call_openai(analysis_prompt, use_web_search=True, timeout_sec=180)
                 lead_info['analysis'] = analysis
 
+                # Save analysis to DB
+                profile = conv.get('correspondentProfile', {})
+                conversation_id = conv.get('conversationId', str(uuid.uuid4()))
+                lead_id_result = get_lead_by_conversation_id(conversation_id)
+                if lead_id_result:
+                    save_analysis(lead_id_result['id'], analysis)
+
                 lead_info['step'] = 'generating_messages'
                 job['status_text'] = f'Generating messages for {lead_name} ({idx + 1}/{len(leads_to_retry)})...'
 
@@ -322,6 +381,10 @@ async def retry_leads_pipeline(job_id: str, lead_names: List[str]):
                 messages_data = await call_openai(msg_prompt, use_web_search=False, timeout_sec=120)
                 lead_info['messages_data'] = messages_data
                 lead_info['error'] = None
+
+                # Save messages to DB
+                if lead_id_result:
+                    save_messages(lead_id_result['id'], messages_data)
 
                 lead_info['status'] = 'done'
                 lead_info['step'] = 'done'
@@ -362,6 +425,93 @@ async def root():
 async def get_accounts():
     """Return available LinkedIn accounts"""
     return {"accounts": LINKEDIN_ACCOUNTS}
+
+
+
+
+@api_router.post("/webhook/heyreach")
+async def heyreach_webhook(request: Request):
+    """
+    Webhook endpoint for HeyReach events.
+    Handles EVERY_MESSAGE_REPLY_RECEIVED events.
+    """
+    try:
+        body = await request.json()
+        logger.info(f"Received webhook: {json.dumps(body)[:500]}")
+        
+        success = await process_webhook_event(body)
+        
+        if success:
+            return {"status": "queued", "message": "Conversation queued for analysis"}
+        else:
+            return {"status": "skipped", "message": "Event skipped or already processed"}
+            
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        raise HTTPException(status_code=500, detail=f"Webhook processing error: {str(e)}")
+
+
+@api_router.get("/leads/{account_id}")
+async def get_leads(account_id: int):
+    """Get all analyzed leads for a specific account"""
+    try:
+        leads = get_all_leads_for_account(account_id)
+        return {"leads": leads}
+    except Exception as e:
+        logger.error(f"Error fetching leads: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@api_router.get("/queue/stats")
+async def get_stats():
+    """Get processing queue statistics"""
+    stats = get_queue_stats()
+    return {"stats": stats}
+
+
+@api_router.get("/leads")
+async def get_all_leads():
+    """Get all leads from all accounts (for debugging)"""
+    import sqlite3
+    from database import get_db_connection
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT account_id FROM leads")
+        account_ids = [row[0] for row in cursor.fetchall()]
+
+    all_leads = []
+    for acc_id in account_ids:
+        leads = get_all_leads_for_account(acc_id)
+        all_leads.extend(leads)
+
+    return {"leads": all_leads, "total": len(all_leads)}
+
+
+@api_router.delete("/leads/{conversation_id}")
+async def delete_lead(conversation_id: str):
+    """
+    Delete a lead and all associated data (classifications, analyses, messages).
+    """
+    try:
+        from database import delete_lead as db_delete_lead
+        
+        logger.info(f"Attempting to delete lead: {conversation_id}")
+        deleted = db_delete_lead(conversation_id)
+        
+        if deleted:
+            logger.info(f"Successfully deleted lead: {conversation_id}")
+            return {"status": "success", "message": f"Lead {conversation_id} deleted"}
+        else:
+            logger.warning(f"Lead not found: {conversation_id}")
+            raise HTTPException(status_code=404, detail="Lead not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting lead {conversation_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to delete lead: {str(e)}")
 
 
 class RunAnalysisRequest(BaseModel):
@@ -502,42 +652,72 @@ class ChatMessageItem(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    job_id: str
-    lead_name: str
+    conversation_id: str          # DB identifier — always available (DB or in-memory)
+    lead_name: str                 # used as fallback label if DB has no name yet
     messages: List[ChatMessageItem]
+    job_id: Optional[str] = None  # kept for backward compatibility only
 
 
 @api_router.post("/chat")
 async def chat_with_lead(request: ChatRequest):
-    """Chat with GPT-4o about a specific lead using that lead's full analysis as context."""
-    job = jobs.get(request.job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+    """Chat with GPT-5.1 (+ web search) about a specific lead.
 
-    lead = next(
-        (li for li in job.get('leads_info', []) if li.get('name') == request.lead_name),
-        None
-    )
-    if lead is None:
-        raise HTTPException(status_code=404, detail=f"Lead '{request.lead_name}' not found in job")
+    Lookup order:
+    1. SQLite DB by conversation_id (works after page reload or webhook-triggered analysis)
+    2. In-memory job store by job_id + lead_name (fallback for leads from current session
+       that haven't been persisted yet)
+    """
+    from database import get_lead_by_conversation_id as db_get_lead
 
-    analysis = lead.get('analysis', {})
-    lead_context = {
-        'name': lead.get('name', ''),
-        'company': lead.get('company', ''),
-        'position': lead.get('position', ''),
-        'location': lead.get('location', ''),
-        'intent': lead.get('intent', ''),
-        'intent_confidence': lead.get('intent_confidence', ''),
-        'executive_summary': analysis.get('executive_summary', ''),
-        'analysis': analysis,
-    }
+    lead_context = None
+
+    # --- Primary: DB lookup ---
+    db_lead = db_get_lead(request.conversation_id)
+    if db_lead:
+        analysis = db_lead.get('analysis', {})
+        lead_context = {
+            'name': db_lead.get('full_name') or request.lead_name,
+            'company': db_lead.get('company_name', ''),
+            'position': db_lead.get('position', ''),
+            'location': db_lead.get('location', ''),
+            'intent': db_lead.get('intent', ''),
+            'intent_confidence': db_lead.get('confidence', ''),
+            'executive_summary': analysis.get('executive_summary', ''),
+            'analysis': analysis,
+        }
+
+    # --- Fallback: in-memory job store ---
+    if lead_context is None and request.job_id:
+        job = jobs.get(request.job_id)
+        if job:
+            mem_lead = next(
+                (li for li in job.get('leads_info', []) if li.get('name') == request.lead_name),
+                None
+            )
+            if mem_lead:
+                analysis = mem_lead.get('analysis', {})
+                lead_context = {
+                    'name': mem_lead.get('name', request.lead_name),
+                    'company': mem_lead.get('company', ''),
+                    'position': mem_lead.get('position', ''),
+                    'location': mem_lead.get('location', ''),
+                    'intent': mem_lead.get('intent', ''),
+                    'intent_confidence': mem_lead.get('intent_confidence', ''),
+                    'executive_summary': analysis.get('executive_summary', ''),
+                    'analysis': analysis,
+                }
+
+    if lead_context is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Lead '{request.lead_name}' not found in DB or active job"
+        )
 
     system_prompt = create_chat_system_prompt(lead_context)
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
 
     try:
-        reply = await call_openai_chat(system_prompt, messages, timeout_sec=60)
+        reply = await call_openai_chat(system_prompt, messages, timeout_sec=90)
     except Exception as e:
         logger.error(f"Chat error for lead {request.lead_name}: {e}")
         raise HTTPException(status_code=500, detail=f"OpenAI request failed: {str(e)}")

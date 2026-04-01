@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { LeadCard } from "@/components/LeadCard";
+import { toast } from "sonner";
 import {
   Select,
   SelectContent,
@@ -20,9 +21,27 @@ import {
   XCircle,
   BarChart3,
   RefreshCw,
+  Inbox,
+  Clock,
+  Trash2,
 } from "lucide-react";
 
-export function Dashboard({ isRunning, status, results, error, onRunAnalysis, onRetryLeads, jobId, accounts, selectedAccountId, onAccountChange }) {
+const API = process.env.REACT_APP_BACKEND_URL + '/api';
+
+export function Dashboard({ 
+  isRunning, 
+  status, 
+  results, 
+  leadsFromDb, 
+  queueStats,
+  error, 
+  onRunAnalysis, 
+  onRetryLeads, 
+  jobId, 
+  accounts, 
+  selectedAccountId, 
+  onAccountChange 
+}) {
   const [selectedLeads, setSelectedLeads] = useState(new Set());
 
   const toggleSelect = (name) => {
@@ -39,14 +58,54 @@ export function Dashboard({ isRunning, status, results, error, onRunAnalysis, on
     setSelectedLeads(new Set());
     onRetryLeads(names);
   };
+
+  const handleDelete = async (lead) => {
+    if (!window.confirm(`Are you sure you want to delete "${lead.name}"? This action cannot be undone.`)) {
+      return;
+    }
+    
+    try {
+      // Get conversation_id from the lead data (passed from DB)
+      const conversationId = lead.conversation_id || lead.profile_url;
+      
+      if (!conversationId) {
+        toast.error("Cannot delete lead: missing conversation ID");
+        return;
+      }
+      
+      const response = await fetch(`${API}/leads/${conversationId}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok) {
+        toast.success(`Lead "${lead.name}" deleted`);
+        // Reload the page to refresh data
+        setTimeout(() => window.location.reload(), 1000);
+      } else {
+        // Handle HTTP errors
+        const errorMsg = data?.detail || data?.message || `HTTP ${response.status}`;
+        toast.error(`Failed to delete: ${errorMsg}`);
+      }
+    } catch (e) {
+      // Handle network errors or other exceptions
+      console.error('Delete error:', e);
+      toast.error(`Failed to delete: ${e.message || 'Network error'}`);
+    }
+  };
+  
+  // Only use DB leads - results from job is only for manual analysis progress
+  const hasDbLeads = leadsFromDb.length > 0;
+  const dbDoneCount = leadsFromDb.filter((l) => l.messages).length || 0;
+  const dbPendingCount = queueStats?.pending || 0;
   const totalLeads = status?.total_leads || 0;
   const processed = status?.processed || 0;
   const progressPercent = totalLeads > 0 ? Math.round((processed / totalLeads) * 100) : 0;
   const isComplete = status?.completed;
-  const hasResults = results?.results?.length > 0;
-
-  const doneCount = results?.results?.filter((r) => r.status === "done").length || 0;
-  const failedCount = results?.results?.filter((r) => r.status === "failed").length || 0;
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-8">
@@ -63,6 +122,22 @@ export function Dashboard({ isRunning, status, results, error, onRunAnalysis, on
             <p className="text-sm text-slate-500 mt-1">
               Automated B2B lead analysis &amp; message generation
             </p>
+            {queueStats && (
+              <div className="flex items-center gap-3 mt-2 text-xs">
+                {queueStats.pending > 0 && (
+                  <span className="flex items-center gap-1 text-amber-600">
+                    <Clock className="h-3.5 w-3.5" />
+                    {queueStats.pending} processing
+                  </span>
+                )}
+                {dbDoneCount > 0 && (
+                  <span className="flex items-center gap-1 text-emerald-600">
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    {dbDoneCount} ready
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <Badge
             variant="outline"
@@ -199,68 +274,98 @@ export function Dashboard({ isRunning, status, results, error, onRunAnalysis, on
         </div>
       )}
 
-      {/* Results Summary */}
-      {hasResults && (
+      {/* Unread Leads from DB */}
+      {hasDbLeads && !isRunning && (
         <section data-testid="results-section">
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-2xl font-semibold tracking-tight text-[#1a2744]">
-              Results
+              Unread Leads
             </h2>
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-1.5 text-sm text-slate-500">
-                <Users className="h-4 w-4" />
-                <span>{results.results.length} leads</span>
+                <Inbox className="h-4 w-4" />
+                <span>{leadsFromDb.length} total</span>
               </div>
-              {doneCount > 0 && (
+              {dbDoneCount > 0 && (
                 <div className="flex items-center gap-1.5 text-sm text-emerald-600">
                   <CheckCircle2 className="h-4 w-4" />
-                  <span>{doneCount} analyzed</span>
+                  <span>{dbDoneCount} analyzed</span>
                 </div>
               )}
-              {failedCount > 0 && (
-                <div className="flex items-center gap-1.5 text-sm text-red-500">
-                  <XCircle className="h-4 w-4" />
-                  <span>{failedCount} failed</span>
+              {dbPendingCount > 0 && (
+                <div className="flex items-center gap-1.5 text-sm text-amber-600">
+                  <Clock className="h-4 w-4" />
+                  <span>{dbPendingCount} processing</span>
                 </div>
               )}
-              {selectedLeads.size > 0 && (
-                <Button
-                  onClick={handleRetry}
-                  disabled={isRunning}
-                  size="sm"
-                  className="bg-amber-500 hover:bg-amber-600 text-white font-semibold"
-                >
-                  <RefreshCw className="mr-1.5 h-4 w-4" />
-                  Retry Selected ({selectedLeads.size})
-                </Button>
-              )}
+              <Button
+                onClick={() => window.location.reload()}
+                variant="outline"
+                size="sm"
+                className="h-8"
+              >
+                <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                Refresh
+              </Button>
             </div>
           </div>
 
           <div className="space-y-4" data-testid="results-list">
-            {results.results.map((lead, idx) => (
-              <LeadCard
-                key={idx}
-                lead={lead}
-                index={idx}
-                jobId={jobId}
-                isSelected={selectedLeads.has(lead.name)}
-                onSelect={() => toggleSelect(lead.name)}
-              />
-            ))}
+            {leadsFromDb.map((lead, idx) => {
+              const leadResult = {
+                conversation_id: lead.conversation_id,
+                name: lead.full_name || "Unknown",
+                company: lead.company_name || "",
+                position: lead.position || "",
+                location: lead.location || "",
+                profileUrl: lead.profile_url || "",
+                headline: lead.headline || "",
+                intent: lead.intent || "",
+                intent_confidence: lead.confidence || "",
+                status: lead.messages ? "done" : "pending",
+                fit_score: lead.analysis?.qualification?.fit_score || 0,
+                qualification_status: lead.analysis?.qualification?.status || "",
+                executive_summary: lead.executive_summary || "",
+                analysis: lead.analysis || {},
+                messages: lead.messages?.messages || [],
+                recommended_top_3: lead.messages?.recommended_top_3 || [],
+                strategy_notes: lead.messages?.notes || "",
+              };
+              return (
+                <LeadCard
+                  key={idx}
+                  lead={leadResult}
+                  index={idx}
+                  isSelected={selectedLeads.has(leadResult.name)}
+                  onSelect={() => toggleSelect(leadResult.name)}
+                  onDelete={handleDelete}
+                />
+              );
+            })}
           </div>
         </section>
       )}
 
       {/* Empty state when nothing has happened yet */}
-      {!isRunning && !status && !results && !error && (
+      {!isRunning && !status && !results && !hasDbLeads && !error && (
         <div className="text-center py-20" data-testid="empty-state">
           <BarChart3 className="h-16 w-16 text-slate-200 mx-auto mb-6" />
           <h3 className="text-lg font-semibold text-slate-500">Ready to analyze</h3>
-          <p className="text-sm text-slate-400 mt-2 max-w-md mx-auto">
-            Click "Run Analysis" to fetch unread LinkedIn conversations, classify each reply by intent,
-            and generate personalized follow-up messages.
+          <p className="text-sm text-slate-400 mt-2 max-w-md mx-auto mb-6">
+            Leads are automatically analyzed when they reply on LinkedIn.
+            Results will appear here instantly.
           </p>
+          <div className="flex items-center justify-center gap-3">
+            <Button
+              onClick={onRunAnalysis}
+              disabled={!selectedAccountId}
+              className="bg-[#10b981] hover:bg-[#059669] text-white h-12 px-8 text-base font-semibold rounded-lg shadow-sm transition-all active:scale-95 disabled:opacity-60"
+              data-testid="run-analysis-btn"
+            >
+              <Play className="mr-2 h-5 w-5" />
+              Run Manual Analysis
+            </Button>
+          </div>
         </div>
       )}
     </div>

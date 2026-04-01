@@ -15,11 +15,12 @@ import {
   ExternalLink,
   AlertCircle,
   MessageSquare,
+  Trash2,
 } from "lucide-react";
 import { MessageGroup } from "@/components/MessageGroup";
 import { LeadChatPanel } from "@/components/LeadChatPanel";
 
-export function LeadCard({ lead, index, isSelected, onSelect, jobId }) {
+export function LeadCard({ lead, index, isSelected, onSelect, onDelete }) {
   const [expanded, setExpanded] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
 
@@ -113,12 +114,28 @@ export function LeadCard({ lead, index, isSelected, onSelect, jobId }) {
         </div>
 
         <div className="flex items-center gap-3 shrink-0 ml-4">
+          {/* Delete button - stop propagation to prevent card toggle */}
+          {onDelete && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(lead);
+              }}
+              className="h-8 w-8 p-0 text-slate-400 hover:text-red-500 hover:bg-red-50"
+              title="Delete lead"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
+          
           {lead.messages?.length > 0 && (
             <span className="text-xs text-slate-400">
               {lead.messages.length} messages
             </span>
           )}
-          {jobId && (
+          {lead.conversation_id && (
             <button
               onClick={(e) => { e.stopPropagation(); setChatOpen(true); }}
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-[#10b981] border border-[#10b981]/30 bg-emerald-50 hover:bg-emerald-100 hover:border-[#10b981]/60 transition-colors"
@@ -207,10 +224,9 @@ export function LeadCard({ lead, index, isSelected, onSelect, jobId }) {
       )}
 
       {/* Per-lead AI chat panel */}
-      {jobId && (
+      {lead.conversation_id && (
         <LeadChatPanel
           lead={lead}
-          jobId={jobId}
           isOpen={chatOpen}
           onClose={() => setChatOpen(false)}
         />

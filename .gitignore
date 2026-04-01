@@ -56,3 +56,7 @@ out/
 
 # Task files (internal)
 .TASKS
+
+# SQLite database files (runtime, not source)
+backend/leads.db
+*.db
