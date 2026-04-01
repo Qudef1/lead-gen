@@ -243,6 +243,7 @@ export function Dashboard({ isRunning, status, results, error, onRunAnalysis, on
                 key={idx}
                 lead={lead}
                 index={idx}
+                jobId={jobId}
                 isSelected={selectedLeads.has(lead.name)}
                 onSelect={() => toggleSelect(lead.name)}
               />

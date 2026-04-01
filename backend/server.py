@@ -22,7 +22,7 @@ if str(ROOT_DIR) not in sys.path:
 load_dotenv(ROOT_DIR / '.env')
 
 from classifier import classify_conversations
-from prompts import create_analysis_prompt, create_catchup_messages_prompt, create_no_thanks_messages_prompt
+from prompts import create_analysis_prompt, create_catchup_messages_prompt, create_no_thanks_messages_prompt, create_chat_system_prompt
 
 HEYREACH_API_KEY = os.environ.get('HEYREACH_API_KEY')
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
@@ -111,6 +111,32 @@ async def call_openai(prompt: str, use_web_search: bool = False, timeout_sec: in
         if not output_text:
             raise Exception("No output_text in OpenAI response")
         return parse_json_from_text(output_text)
+
+
+async def call_openai_chat(system_prompt: str, messages: list, timeout_sec: int = 60) -> str:
+    """Call OpenAI Chat Completions API with a full conversation history.
+
+    Args:
+        system_prompt: System message providing lead context.
+        messages: List of {role, content} dicts representing the conversation so far.
+        timeout_sec: Request timeout in seconds.
+
+    Returns:
+        The assistant reply as a plain string.
+    """
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+    payload = {
+        "model": "gpt-4o",
+        "messages": [{"role": "system", "content": system_prompt}] + messages,
+    }
+
+    async with httpx.AsyncClient(timeout=timeout_sec) as client:
+        response = await client.post(url, headers=headers, json=payload)
+        if response.status_code != 200:
+            raise Exception(f"OpenAI API error: {response.status_code} - {response.text[:500]}")
+        data = response.json()
+        return data["choices"][0]["message"]["content"]
 
 
 
@@ -457,6 +483,55 @@ async def get_results(job_id: str):
         'total_leads': job['total_leads'],
         'results': results
     }
+
+
+class ChatMessageItem(BaseModel):
+    role: str  # "user" or "assistant"
+    content: str
+
+
+class ChatRequest(BaseModel):
+    job_id: str
+    lead_name: str
+    messages: List[ChatMessageItem]
+
+
+@api_router.post("/chat")
+async def chat_with_lead(request: ChatRequest):
+    """Chat with GPT-4o about a specific lead using that lead's full analysis as context."""
+    job = jobs.get(request.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    lead = next(
+        (li for li in job.get('leads_info', []) if li.get('name') == request.lead_name),
+        None
+    )
+    if lead is None:
+        raise HTTPException(status_code=404, detail=f"Lead '{request.lead_name}' not found in job")
+
+    analysis = lead.get('analysis', {})
+    lead_context = {
+        'name': lead.get('name', ''),
+        'company': lead.get('company', ''),
+        'position': lead.get('position', ''),
+        'location': lead.get('location', ''),
+        'intent': lead.get('intent', ''),
+        'intent_confidence': lead.get('intent_confidence', ''),
+        'executive_summary': analysis.get('executive_summary', ''),
+        'analysis': analysis,
+    }
+
+    system_prompt = create_chat_system_prompt(lead_context)
+    messages = [{"role": m.role, "content": m.content} for m in request.messages]
+
+    try:
+        reply = await call_openai_chat(system_prompt, messages, timeout_sec=60)
+    except Exception as e:
+        logger.error(f"Chat error for lead {request.lead_name}: {e}")
+        raise HTTPException(status_code=500, detail=f"OpenAI request failed: {str(e)}")
+
+    return {"reply": reply}
 
 
 app.include_router(api_router)

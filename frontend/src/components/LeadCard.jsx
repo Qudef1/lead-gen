@@ -14,11 +14,14 @@ import {
   Star,
   ExternalLink,
   AlertCircle,
+  MessageSquare,
 } from "lucide-react";
 import { MessageGroup } from "@/components/MessageGroup";
+import { LeadChatPanel } from "@/components/LeadChatPanel";
 
-export function LeadCard({ lead, index, isSelected, onSelect }) {
+export function LeadCard({ lead, index, isSelected, onSelect, jobId }) {
   const [expanded, setExpanded] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
 
   if (lead.status === "failed") {
     return (
@@ -115,6 +118,16 @@ export function LeadCard({ lead, index, isSelected, onSelect }) {
               {lead.messages.length} messages
             </span>
           )}
+          {jobId && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setChatOpen(true); }}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-[#10b981] border border-[#10b981]/30 bg-emerald-50 hover:bg-emerald-100 hover:border-[#10b981]/60 transition-colors"
+              data-testid={`lead-chat-button-${index}`}
+            >
+              <MessageSquare className="h-3.5 w-3.5" />
+              Ask AI
+            </button>
+          )}
           {expanded ? (
             <ChevronUp className="h-5 w-5 text-slate-400" />
           ) : (
@@ -191,6 +204,16 @@ export function LeadCard({ lead, index, isSelected, onSelect }) {
             </div>
           )}
         </div>
+      )}
+
+      {/* Per-lead AI chat panel */}
+      {jobId && (
+        <LeadChatPanel
+          lead={lead}
+          jobId={jobId}
+          isOpen={chatOpen}
+          onClose={() => setChatOpen(false)}
+        />
       )}
     </div>
   );
