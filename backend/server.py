@@ -11,7 +11,7 @@ import hashlib
 import httpx
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 from json_repair import repair_json
 
@@ -23,7 +23,7 @@ if str(ROOT_DIR) not in sys.path:
 load_dotenv(ROOT_DIR / '.env')
 
 from classifier import classify_conversations
-from prompts import create_analysis_prompt, create_catchup_messages_prompt, create_no_thanks_messages_prompt
+from prompts import create_analysis_prompt, create_catchup_messages_prompt, create_no_thanks_messages_prompt, create_chat_system_prompt
 from database import init_db, get_all_leads_for_account, get_lead_by_conversation_id, get_queue_stats
 from webhook_handler import process_webhook_event
 
@@ -126,6 +126,43 @@ async def call_openai(prompt: str, use_web_search: bool = False, timeout_sec: in
         if not output_text:
             raise Exception("No output_text in OpenAI response")
         return parse_json_from_text(output_text)
+
+
+async def call_openai_chat(system_prompt: str, messages: list, timeout_sec: int = 90) -> str:
+    """Call OpenAI Responses API for the per-lead chat with web search enabled.
+
+    Uses the same Responses API as the analysis pipeline so that web_search is
+    available. The system prompt is passed as a 'developer' role message at
+    position 0 of the input array, followed by the full conversation history.
+
+    Args:
+        system_prompt: System message providing lead context.
+        messages: List of {role, content} dicts representing the conversation so far.
+        timeout_sec: Request timeout in seconds (longer than plain chat due to web search).
+
+    Returns:
+        The assistant reply as a plain string.
+    """
+    url = "https://api.openai.com/v1/responses"
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+    payload = {
+        "model": "gpt-5.1",
+        "tools": [{"type": "web_search"}],
+        "input": [
+            {"role": "developer", "content": system_prompt},
+            *[{"role": m["role"], "content": m["content"]} for m in messages],
+        ],
+    }
+
+    async with httpx.AsyncClient(timeout=timeout_sec) as client:
+        response = await client.post(url, headers=headers, json=payload)
+        if response.status_code != 200:
+            raise Exception(f"OpenAI API error: {response.status_code} - {response.text[:500]}")
+        data = response.json()
+        reply = extract_openai_text(data)
+        if not reply:
+            raise Exception("No output_text in OpenAI response")
+        return reply
 
 
 
@@ -607,6 +644,85 @@ async def get_results(job_id: str):
         'total_leads': job['total_leads'],
         'results': results
     }
+
+
+class ChatMessageItem(BaseModel):
+    role: str  # "user" or "assistant"
+    content: str
+
+
+class ChatRequest(BaseModel):
+    conversation_id: str          # DB identifier — always available (DB or in-memory)
+    lead_name: str                 # used as fallback label if DB has no name yet
+    messages: List[ChatMessageItem]
+    job_id: Optional[str] = None  # kept for backward compatibility only
+
+
+@api_router.post("/chat")
+async def chat_with_lead(request: ChatRequest):
+    """Chat with GPT-5.1 (+ web search) about a specific lead.
+
+    Lookup order:
+    1. SQLite DB by conversation_id (works after page reload or webhook-triggered analysis)
+    2. In-memory job store by job_id + lead_name (fallback for leads from current session
+       that haven't been persisted yet)
+    """
+    from database import get_lead_by_conversation_id as db_get_lead
+
+    lead_context = None
+
+    # --- Primary: DB lookup ---
+    db_lead = db_get_lead(request.conversation_id)
+    if db_lead:
+        analysis = db_lead.get('analysis', {})
+        lead_context = {
+            'name': db_lead.get('full_name') or request.lead_name,
+            'company': db_lead.get('company_name', ''),
+            'position': db_lead.get('position', ''),
+            'location': db_lead.get('location', ''),
+            'intent': db_lead.get('intent', ''),
+            'intent_confidence': db_lead.get('confidence', ''),
+            'executive_summary': analysis.get('executive_summary', ''),
+            'analysis': analysis,
+        }
+
+    # --- Fallback: in-memory job store ---
+    if lead_context is None and request.job_id:
+        job = jobs.get(request.job_id)
+        if job:
+            mem_lead = next(
+                (li for li in job.get('leads_info', []) if li.get('name') == request.lead_name),
+                None
+            )
+            if mem_lead:
+                analysis = mem_lead.get('analysis', {})
+                lead_context = {
+                    'name': mem_lead.get('name', request.lead_name),
+                    'company': mem_lead.get('company', ''),
+                    'position': mem_lead.get('position', ''),
+                    'location': mem_lead.get('location', ''),
+                    'intent': mem_lead.get('intent', ''),
+                    'intent_confidence': mem_lead.get('intent_confidence', ''),
+                    'executive_summary': analysis.get('executive_summary', ''),
+                    'analysis': analysis,
+                }
+
+    if lead_context is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Lead '{request.lead_name}' not found in DB or active job"
+        )
+
+    system_prompt = create_chat_system_prompt(lead_context)
+    messages = [{"role": m.role, "content": m.content} for m in request.messages]
+
+    try:
+        reply = await call_openai_chat(system_prompt, messages, timeout_sec=90)
+    except Exception as e:
+        logger.error(f"Chat error for lead {request.lead_name}: {e}")
+        raise HTTPException(status_code=500, detail=f"OpenAI request failed: {str(e)}")
+
+    return {"reply": reply}
 
 
 app.include_router(api_router)

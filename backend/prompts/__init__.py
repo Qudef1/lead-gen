@@ -5,3 +5,4 @@ from .interested import create_interested_messages_prompt
 from .hard_rejection import create_hard_rejection_messages_prompt
 from .question import create_question_messages_prompt
 from .redirect import create_redirect_messages_prompt
+from .chat import create_chat_system_prompt

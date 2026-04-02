@@ -5,9 +5,24 @@ Processes EVERY_MESSAGE_REPLY_RECEIVED events and queues conversations for analy
 import logging
 import json
 import httpx
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_message_timestamp(data: Dict[str, Any]) -> str:
+    """Extract message timestamp from webhook payload.
+
+    HeyReach may use different field names; fall back to current UTC time
+    if none are found so we always have a value to compare.
+    """
+    message = data.get('message', {})
+    for field in ('sentAt', 'timestamp', 'createdAt', 'sent_at', 'created_at'):
+        value = message.get(field)
+        if value:
+            return str(value)
+    return datetime.now(timezone.utc).isoformat()
 
 
 async def fetch_conversation_from_heyreach(conversation_id: str, account_id: int) -> Optional[Dict[str, Any]]:
